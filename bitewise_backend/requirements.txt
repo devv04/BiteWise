@@ -1,0 +1,11 @@
+Flask
+Flask-Cors
+pytesseract
+Pillow
+scikit-learn
+numpy
+requests
+google-generativeai
+googletrans==4.0.0-rc1
+opencv-python
+nest_asyncio
