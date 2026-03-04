@@ -57,7 +57,13 @@ def home():
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     print("WARNING: GEMINI_API_KEY not found in .env file!")
-client = genai.Client(api_key=GEMINI_API_KEY)
+client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options={'timeout': 30_000}  # 30 second timeout
+)
+
+# Model fallback chain — tries each in order if rate-limited
+MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash']
 
 
 # --- Helper: parse numeric value from strings like "365 kcal" or "17 g" ---
@@ -77,7 +83,7 @@ def parse_nutrient_value(value_str):
 
 
 # --- Gemini Vision Handler ---
-def analyze_food_with_gemini(image_data, mime_type, retries=2):
+def analyze_food_with_gemini(image_data, mime_type, retries=1):
     prompt = """Analyze the food in this image. Provide a detailed health analysis in a JSON format.
 The JSON should have the following structure:
 {
@@ -101,32 +107,46 @@ If you cannot confidently determine a specific value or list, use 'N/A' for valu
 Focus on general health, common nutrient estimates based on visual identification, and identify potential disease risks linked to the food."""
 
     image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
+    last_error = None
 
-    for attempt in range(retries + 1):
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=[image_part, prompt]
-            )
-            response_text = response.text.strip()
-            if response_text.startswith('```json') and response_text.endswith('```'):
-                json_str = response_text[7:-3].strip()
-            else:
-                json_str = response_text
-            return json.loads(json_str)
-
-        except Exception as e:
-            error_str = str(e)
-            print(f"Gemini API Error (attempt {attempt + 1}/{retries + 1}): {e}")
-            if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
-                if attempt < retries:
-                    print(f"Rate limited. Waiting 60s before retry...")
-                    time.sleep(60)
-                    continue
+    for model_name in MODELS:
+        for attempt in range(retries + 1):
+            try:
+                print(f"Trying {model_name} (attempt {attempt + 1})...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[image_part, prompt]
+                )
+                response_text = response.text.strip()
+                if response_text.startswith('```json') and response_text.endswith('```'):
+                    json_str = response_text[7:-3].strip()
                 else:
-                    raise ValueError("API rate limit reached. Please wait a minute and try again.")
-            else:
-                raise ValueError(f"Gemini analysis failed: {error_str}")
+                    json_str = response_text
+                return json.loads(json_str)
+
+            except Exception as e:
+                error_str = str(e)
+                last_error = e
+                print(f"Gemini API Error ({model_name}, attempt {attempt + 1}/{retries + 1}): {e}")
+                if 'timed out' in error_str.lower() or 'timeout' in error_str.lower():
+                    if attempt < retries:
+                        print("Request timed out. Retrying...")
+                        continue
+                    else:
+                        break  # Try next model
+                elif '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
+                    if attempt < retries:
+                        print(f"Rate limited on {model_name}. Waiting 5s before retry...")
+                        time.sleep(5)
+                        continue
+                    else:
+                        print(f"{model_name} rate limited. Trying next model...")
+                        break  # Try next model
+                else:
+                    break  # Non-retryable error, try next model
+
+    # All models failed
+    raise ValueError(f"All models failed. Last error: {last_error}")
 
 
 def build_result(gemini_result):
