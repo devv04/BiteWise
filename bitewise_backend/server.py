@@ -1,52 +1,87 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import pytesseract
-from PIL import Image
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timezone, timedelta
 import re
-import requests
-import numpy as np
-from sklearn.linear_model import LogisticRegression
 import json
-import cv2
-from googletrans import Translator
-import google.generativeai as genai
+import time
+from google import genai
+from google.genai import types
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# --- Basic home route ---
+# --- Database setup ---
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///bitewise.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+class ScanResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    food_name = db.Column(db.String(100), nullable=True)
+    health_score = db.Column(db.String(50), nullable=False)
+    reason = db.Column(db.Text, nullable=True)
+    warnings = db.Column(db.Text, nullable=True)
+    allergens = db.Column(db.Text, nullable=True)
+    disease_risk = db.Column(db.Text, nullable=True)
+    suggestions = db.Column(db.Text, nullable=True)
+    nutrient_values = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'foodName': self.food_name,
+            'healthScore': self.health_score,
+            'reason': self.reason,
+            'warnings': json.loads(self.warnings) if self.warnings else [],
+            'allergens': json.loads(self.allergens) if self.allergens else [],
+            'diseaseRisk': json.loads(self.disease_risk) if self.disease_risk else [],
+            'suggestions': json.loads(self.suggestions) if self.suggestions else [],
+            'nutrientValues': json.loads(self.nutrient_values) if self.nutrient_values else {},
+            'timestamp': self.created_at.isoformat() if self.created_at else None
+        }
+
+with app.app_context():
+    db.create_all()
+
 @app.route("/")
 def home():
     return "Bitewise Backend is running!"
 
-# --- Gemini API Key setup ---
-GEMINI_API_KEY = "AIzaSyAMsoCxKsJKWSW0Ie-lsJUDFhK2PbapL4g"
-genai.configure(api_key=GEMINI_API_KEY)
+# --- Gemini client setup ---
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    print("WARNING: GEMINI_API_KEY not found in .env file!")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- Dummy Logistic Regression (optional use) ---
-X_train = np.array([
-    [5.0, 1.2, 10.0, 0],
-    [2.0, 0.5, 3.0, 1],
-    [8.0, 1.5, 15.0, 0],
-    [3.0, 0.7, 5.0, 1],
-])
-y_train = np.array([0, 1, 0, 1])
-model = LogisticRegression().fit(X_train, y_train)
 
-translator = Translator()
+# --- Helper: parse numeric value from strings like "365 kcal" or "17 g" ---
+def parse_nutrient_value(value_str):
+    if not value_str or value_str == 'N/A':
+        return 0.0
+    try:
+        nums = re.findall(r'[\d.]+', str(value_str))
+        if nums:
+            # If range like "500-650", take the average
+            if len(nums) >= 2 and '-' in str(value_str):
+                return (float(nums[0]) + float(nums[1])) / 2
+            return float(nums[0])
+    except (ValueError, IndexError):
+        pass
+    return 0.0
 
-def get_image_parts(image_data, mime_type):
-    return {'mime_type': mime_type, 'data': image_data}
 
 # --- Gemini Vision Handler ---
-def analyze_food_with_gemini(image_data, mime_type):
-    try:
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-
-        prompt = """Analyze the food in this image. Provide a detailed health analysis in a JSON format.
+def analyze_food_with_gemini(image_data, mime_type, retries=2):
+    prompt = """Analyze the food in this image. Provide a detailed health analysis in a JSON format.
 The JSON should have the following structure:
 {
+  "foodName": "Name of the food item detected (e.g., 'French Fries', 'Caesar Salad', 'Chicken Biryani')",
   "healthScore": "Healthy" | "Moderately Healthy" | "Unhealthy",
   "reason": "Brief explanation of why it's healthy/unhealthy.",
   "warnings": ["List of potential warnings, e.g., 'High in sugar', 'High in saturated fat', 'High in sodium', 'Processed food', 'Contains artificial ingredients'"],
@@ -61,67 +96,41 @@ The JSON should have the following structure:
     "fiber": "X g"
   }
 }
+If no food is detected in the image, set foodName to "No food detected" and healthScore to "N/A".
 If you cannot confidently determine a specific value or list, use 'N/A' for values or an empty array for lists.
-Focus on general health, common nutrient estimates based on visual identification, and identify potential disease risks (e.g., diabetes from high sugar, heart disease from high fat) linked to the food's appearance or common knowledge."""
+Focus on general health, common nutrient estimates based on visual identification, and identify potential disease risks linked to the food."""
 
-        image_part = get_image_parts(image_data, mime_type)
-        response = gemini_model.generate_content([image_part, prompt], stream=False)
+    image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
 
-        response_text = response.text.strip()
+    for attempt in range(retries + 1):
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[image_part, prompt]
+            )
+            response_text = response.text.strip()
+            if response_text.startswith('```json') and response_text.endswith('```'):
+                json_str = response_text[7:-3].strip()
+            else:
+                json_str = response_text
+            return json.loads(json_str)
 
-        if response_text.startswith('```json') and response_text.endswith('```'):
-            json_str = response_text[7:-3].strip()
-        else:
-            json_str = response_text
+        except Exception as e:
+            error_str = str(e)
+            print(f"Gemini API Error (attempt {attempt + 1}/{retries + 1}): {e}")
+            if '429' in error_str or 'RESOURCE_EXHAUSTED' in error_str:
+                if attempt < retries:
+                    print(f"Rate limited. Waiting 60s before retry...")
+                    time.sleep(60)
+                    continue
+                else:
+                    raise ValueError("API rate limit reached. Please wait a minute and try again.")
+            else:
+                raise ValueError(f"Gemini analysis failed: {error_str}")
 
-        return json.loads(json_str)
 
-    except Exception as e:
-        print(f"Gemini API Error: {e}")
-        raise ValueError(f"Gemini analysis failed: {str(e)}")
-
-# --- OCR + Fallback Helpers ---
-def preprocess_image_ocr(image):
-    img_cv = np.array(image)
-    gray = cv2.cvtColor(img_cv, cv2.COLOR_RGB2GRAY)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return Image.fromarray(thresh)
-
-def extract_text_from_image_ocr(image):
-    try:
-        preprocessed = preprocess_image_ocr(image)
-        return pytesseract.image_to_string(preprocessed).strip()
-    except Exception as e:
-        print(f"OCR failed: {e}")
-        return ""
-
-def parse_ingredients_ocr(text):
-    ingredients = re.split(r',|\n|;', text.lower())
-    return [ing.strip() for ing in ingredients if ing.strip() and len(ing.strip()) > 1]
-
-def fetch_nutrition_data_fallback(ingredients, lang):
-    try:
-        query = ingredients[0] if ingredients else "food"
-        if lang != 'en':
-            query = translator.translate(query, src='en', dest=lang).text
-        response = requests.get(f"https://world.openfoodfacts.org/cgi/search.pl?search_terms={query}&search_simple=1&action=process&json=1", timeout=5)
-        if response.status_code == 200 and response.json().get('products'):
-            data = response.json()['products'][0].get('nutriments', {})
-            return {
-                'saturated_fat': float(data.get('saturated-fat_100g', 0)),
-                'sodium': float(data.get('sodium_100g', 0)),
-                'sugar': float(data.get('sugars_100g', 0))
-            }
-    except Exception as e:
-        print(f"OpenFoodFacts error: {e}")
-    return {'saturated_fat': 5.0, 'sodium': 1.2, 'sugar': 10.0}
-
-def detect_allergens_fallback(ingredients):
-    allergens = ['peanut', 'gluten', 'milk', 'egg', 'soy', 'wheat', 'nut', 'lactose']
-    detected = [ing for ing in ingredients for allergen in allergens if allergen in ing]
-    return detected if detected else ['None detected']
-
-def combine_analysis_results(gemini_result, ocr_ingredients, fallback_nutrition_data):
+def build_result(gemini_result):
+    food_name = gemini_result.get("foodName", "Unknown Food")
     health_score = gemini_result.get("healthScore", "Unknown")
     reason = gemini_result.get("reason", "Analysis provided by AI.")
     warnings = gemini_result.get("warnings", [])
@@ -132,38 +141,17 @@ def combine_analysis_results(gemini_result, ocr_ingredients, fallback_nutrition_
         "calories": "N/A", "protein": "N/A", "carbohydrates": "N/A", "fat": "N/A", "fiber": "N/A"
     })
 
-    # Enhanced suggestions with veg and non-veg options
-    if not suggestions:
-        suggestions = [
-            "Quinoa salad (vegetarian)",
-            "Lentil soup (vegetarian)",
-            "Grilled chicken (non-vegetarian)",
-            "Fish curry (non-vegetarian)",
-            "Eat a balanced diet and consult a nutritionist."
-        ]
-
-    if ocr_ingredients:
-        ocr_allergens = detect_allergens_fallback(ocr_ingredients)
-        for allergen in ocr_ingredients:
-            if allergen not in allergens and allergen != 'None detected':
-                allergens.append(allergen)
-
-    # Fallback for disease risk if not provided by Gemini
-    if not disease_risk:
-        disease_risk = ["None detected"]
-        if "High in sugar" in warnings or float(nutrient_values.get("carbohydrates", "0").replace("g", "")) > 20:
-            disease_risk.append("Diabetes")
-        if "High in saturated fat" in warnings or float(nutrient_values.get("fat", "0").replace("g", "")) > 10:
-            disease_risk.append("Heart Disease")
-        if float(nutrient_values.get("calories", "0").replace("kcal", "")) > 500:
-            disease_risk.append("Obesity")
-
     if not warnings:
         warnings = ["No specific warnings detected."]
     if not allergens:
         allergens = ["None detected."]
+    if not disease_risk:
+        disease_risk = ["None detected"]
+    if not suggestions:
+        suggestions = ["Eat a balanced diet and consult a nutritionist."]
 
     return {
+        "foodName": food_name,
         "healthScore": health_score,
         "reason": reason,
         "warnings": warnings,
@@ -173,36 +161,114 @@ def combine_analysis_results(gemini_result, ocr_ingredients, fallback_nutrition_
         "nutrientValues": nutrient_values
     }
 
-# --- Flask Route (sync now) ---
+
+# --- Analyze endpoint ---
 @app.route("/analyze", methods=["POST"])
 def analyze_image_route():
-    print("DEBUG: analyze_image_route: Request received at /analyze endpoint.")
     if "image" not in request.files:
         return jsonify({"error": "No image provided"}), 400
 
     image_file = request.files["image"]
-    lang = request.form.get("language", "en")
-    print(f"DEBUG: Image received. MIME Type: {image_file.content_type}, Language: {lang}")
-
     try:
         image_bytes = image_file.read()
         mime_type = image_file.content_type
-        print("DEBUG: Calling Gemini analyzer...")
         gemini_result = analyze_food_with_gemini(image_bytes, mime_type)
-        print("DEBUG: Gemini analysis returned.")
+        final_result = build_result(gemini_result)
 
-        final_result = combine_analysis_results(gemini_result, [], {})
+        # Save to database
+        try:
+            scan = ScanResult(
+                food_name=final_result.get('foodName', 'Unknown Food'),
+                health_score=final_result.get('healthScore', 'Unknown'),
+                reason=final_result.get('reason', ''),
+                warnings=json.dumps(final_result.get('warnings', [])),
+                allergens=json.dumps(final_result.get('allergens', [])),
+                disease_risk=json.dumps(final_result.get('diseaseRisk', [])),
+                suggestions=json.dumps(final_result.get('suggestions', [])),
+                nutrient_values=json.dumps(final_result.get('nutrientValues', {})),
+            )
+            db.session.add(scan)
+            db.session.commit()
+            final_result['id'] = scan.id
+            final_result['timestamp'] = scan.created_at.isoformat()
+        except Exception as db_err:
+            print(f"WARNING: Failed to save to database: {db_err}")
+            db.session.rollback()
+
         return jsonify(final_result)
     except Exception as e:
-        print(f"ERROR: Full analysis failed: {str(e)}")
+        print(f"ERROR: Analysis failed: {str(e)}")
         return jsonify({"error": f"Analysis failed: {str(e)}"}), 500
 
-# --- Start Flask Server ---
+
+# --- History endpoint ---
+@app.route("/history", methods=["GET"])
+def get_history():
+    try:
+        scans = ScanResult.query.order_by(ScanResult.created_at.desc()).limit(50).all()
+        return jsonify([scan.to_dict() for scan in scans])
+    except Exception as e:
+        return jsonify([]), 500
+
+
+# --- Daily Summary endpoint (NEW FEATURE) ---
+@app.route("/daily-summary", methods=["GET"])
+def daily_summary():
+    try:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        scans = ScanResult.query.filter(ScanResult.created_at >= today_start).all()
+
+        total_calories = 0
+        total_protein = 0
+        total_carbs = 0
+        total_fat = 0
+        total_fiber = 0
+        foods_eaten = []
+        score_counts = {"Healthy": 0, "Moderately Healthy": 0, "Unhealthy": 0}
+
+        for scan in scans:
+            nutrients = json.loads(scan.nutrient_values) if scan.nutrient_values else {}
+            total_calories += parse_nutrient_value(nutrients.get('calories', '0'))
+            total_protein += parse_nutrient_value(nutrients.get('protein', '0'))
+            total_carbs += parse_nutrient_value(nutrients.get('carbohydrates', '0'))
+            total_fat += parse_nutrient_value(nutrients.get('fat', '0'))
+            total_fiber += parse_nutrient_value(nutrients.get('fiber', '0'))
+
+            if scan.food_name and scan.food_name != 'No food detected':
+                foods_eaten.append({
+                    'name': scan.food_name,
+                    'healthScore': scan.health_score,
+                    'calories': parse_nutrient_value(nutrients.get('calories', '0')),
+                    'time': scan.created_at.strftime('%I:%M %p') if scan.created_at else ''
+                })
+
+            if scan.health_score in score_counts:
+                score_counts[scan.health_score] += 1
+
+        calorie_goal = 2000
+        return jsonify({
+            'totalScans': len(scans),
+            'calorieGoal': calorie_goal,
+            'totalCalories': round(total_calories),
+            'calorieProgress': min(round((total_calories / calorie_goal) * 100), 100),
+            'macros': {
+                'protein': round(total_protein, 1),
+                'carbohydrates': round(total_carbs, 1),
+                'fat': round(total_fat, 1),
+                'fiber': round(total_fiber, 1),
+            },
+            'foodsEaten': foods_eaten,
+            'scoreCounts': score_counts,
+        })
+    except Exception as e:
+        print(f"ERROR: Daily summary failed: {e}")
+        return jsonify({'totalScans': 0, 'calorieGoal': 2000, 'totalCalories': 0,
+                        'calorieProgress': 0, 'macros': {}, 'foodsEaten': [], 'scoreCounts': {}}), 500
+
+
 if __name__ == "__main__":
     print("-" * 50)
-    print("Bitewise Backend Server is Starting...")
-    print("Frontend App URL: http://localhost:3000")
-    print("Backend API Endpoint: http://localhost:5001/analyze")
-    print("Press Ctrl+C to stop the server.")
+    print("Bitewise Backend Server")
+    print("API: http://localhost:5001")
     print("-" * 50)
     app.run(debug=True, port=5001, host='0.0.0.0')

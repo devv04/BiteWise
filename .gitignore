@@ -7,82 +7,73 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# --- General ---
 
-# Editor directories and files
-.vscode/*
+# Windows system files
+Thumbs.db
+ehthumbs.db
+
+# IDE and editor files
+.idea/
+*.sublime-project
+*.sublime-workspace
+.vscode/
 !.vscode/extensions.json
-.idea
-.DS_Store
+*.code-workspace
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
---- General ---
 
+# --- Python (Backend) ---
 
-Ignore Windows system files
+# Virtual environment
+venv/
+env/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+env.bak/
+pip/
+Pipfile.lock
 
-Thumbs.db ehthumbs.db
+# Python instance/logs
+instance/
 
-Ignore IDE and editor files
+# Secrets
+config.py
+.env
 
-.idea/ *.sublime-project *.sublime-workspace .vscode/ *.code-workspace
+# --- Node.js/React (Frontend) ---
 
-Ignore build output
-
-dist/ build/
-
---- Python (Backend) ---
-
-Virtual environment
-
-venv/ env/ *.pyc pycache/ *.pyo *.pyd .Python env.bak/ pip/ pipfile.lock
-
-Python bytecode and logs
-
-*.log instance/
-
-Gemini API key 
-
-config.py .env
-
---- Node.js/React (Frontend) ---
-
-Node modules
-
+# Node modules
 node_modules/
 
-Build output
+# Build output
+build/
+dist/
+dist-ssr/
 
-build/ dist/
+# Local configuration
+.vite/
+*.local
 
-Local configuration
+# Lock files (uncomment if you want to track them)
+# package-lock.json
+# yarn.lock
 
-.vite/ vite.config.ts tsconfig.json
-
-Lock files
-
-package-lock.json yarn.lock
-
-Coverage reports
-
+# Coverage reports
 coverage/
 
---- OS-specific ---
+# --- OS-specific ---
 
-Ignore macOS Finder tags
-
+# macOS
+.DS_Store
 ._*
 
-Ignore temporary files
-
-*.tmp *.temp
-
---- Custom ---
-
-
+# Temporary files
+*.tmp
+*.temp
