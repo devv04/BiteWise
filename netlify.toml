@@ -1,0 +1,4 @@
+[build]
+  base = "bitewise_frontend/foodscan"
+  command = "npm install && npm run build"
+  publish = "bitewise_frontend/foodscan/dist"

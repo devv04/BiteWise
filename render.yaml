@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: bitewise-api
+    runtime: python
+    rootDir: bitewise_backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn server:app --bind 0.0.0.0:$PORT --timeout 120
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    plan: free

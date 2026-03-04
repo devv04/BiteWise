@@ -10,3 +10,4 @@ google-genai
 deep-translator
 opencv-python
 pytest
+gunicorn
