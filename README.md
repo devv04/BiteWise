@@ -1,186 +1,154 @@
-# BiteWise
-A smart food monitoring app which detects your food's image and tells you if it's healthy or unhealthy. Thus forces you to opt for better food choices
+<p align="center">
+  <img src="bitewise_frontend/foodscan/public/logo.png" alt="BiteWise Logo" width="120" />
+</p>
 
-BiteWise - Food Health Analyzer
+<h1 align="center">BiteWise</h1>
 
-Overview:
-BiteWise is an innovative application designed to help users assess the healthiness of their food through image analysis. By uploading or capturing an image of food, BiteWise provides a detailed health analysis, including a health score, potential warnings, allergens, disease risks, and nutritional suggestions. The app leverages AI-powered image recognition and natural language processing to deliver insightful recommendations, making it a valuable tool for health-conscious individuals.
-This repository contains both the frontend and backend code for the BiteWise application.
-Features
+<p align="center">
+  <strong>AI-Powered Food Health Analyzer</strong><br/>
+  Snap a photo of your food → get instant health insights, nutrient breakdown, and smarter alternatives.
+</p>
 
-Image-Based Analysis: Analyze food images captured via camera or uploaded files.
-Health Score: Categorizes food as "Healthy", "Moderately Healthy", or "Unhealthy".
-Detailed Insights: Provides reasons, warnings, allergens, disease risks, and nutritional values.
-Multilingual Support: Supports English, Spanish, and French.
-Health Dashboard: Tracks scan history for the last 5 analyses.
-Suggestions: Offers vegetarian and non-vegetarian healthier alternatives.
-Interactive UI: Features animations, GIFs, and a responsive design.
+<p align="center">
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white" />
+  <img src="https://img.shields.io/badge/Flask-3.x-000000?logo=flask&logoColor=white" />
+  <img src="https://img.shields.io/badge/Gemini_AI-2.5_Flash-4285F4?logo=google&logoColor=white" />
+  <img src="https://img.shields.io/badge/SQLite-Database-003B57?logo=sqlite&logoColor=white" />
+</p>
 
-Tech Stack
-Frontend
+---
 
-Framework: React with Vite
-Styling: Tailwind CSS
-Animation: Framer Motion
-HTTP Requests: Axios
-Media Handling: HTML5 Canvas, File API
-Dependencies: Hosted via CDN (e.g., React, ReactDOM)
+## What It Does
 
-Backend
+BiteWise uses **Google Gemini AI** to analyze food images and deliver:
 
-Framework: Flask
-CORS: Flask-CORS
-Image Processing: OpenCV (cv2), Pillow (PIL)
-OCR: Pytesseract
-AI/ML: Google Generative AI (Gemini), Scikit-learn (Logistic Regression - optional)
-Translation: googletrans
-Data Source: OpenFoodFacts API (fallback)
-Language: Python
+- 🏷️ **Food Detection** — identifies the food item from a photo
+- 🟢🟡🔴 **Health Score** — Healthy / Moderately Healthy / Unhealthy
+- ⚠️ **Warnings** — high sugar, sodium, saturated fat, processed ingredients
+- 🧬 **Allergen Detection** — gluten, dairy, nuts, soy, eggs
+- 🩺 **Disease Risk Assessment** — diabetes, heart disease, obesity links
+- 💡 **Healthier Alternatives** — practical suggestions for better choices
+- 📊 **Nutrient Breakdown** — calories, protein, carbs, fat, fiber
+- 🎯 **Daily Nutrition Tracker** — calorie ring, macro progress bars, food log
 
-Requirements
-System Requirements
+## Tech Stack
 
-Operating System: Windows, macOS, or Linux
-Memory: Minimum 4GB RAM (8GB recommended)
-Storage: At least 2GB free space
-Internet: Required for API calls and dependency downloads
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React 18 · Vite · Framer Motion · Axios |
+| **Backend** | Flask · Flask-CORS · Flask-SQLAlchemy |
+| **AI Engine** | Google Gemini 2.5 Flash (with 2.0 Flash fallback) |
+| **Database** | SQLite |
+| **Styling** | Tailwind CSS · Inline health-themed design system |
 
-Software Requirements
+## Quick Start
 
-Python: Version 3.8 or higher
-Node.js: Version 18 or higher
-npm: Included with Node.js
-Git: For cloning the repository
+### Prerequisites
 
-Python Dependencies
+- **Python** ≥ 3.8
+- **Node.js** ≥ 18
+- **Gemini API Key** — get one free at [Google AI Studio](https://aistudio.google.com/apikey)
 
-flask
-flask-cors
-pytesseract
-pillow
-opencv-python
-numpy
-scikit-learn
-google-generativeai
-googletrans==3.1.0a0
-requests
+### 1. Clone
 
-Frontend Dependencies
-
-Automatically managed via package.json (installed with npm install)
-
-Installation
-Clone the Repository
+```bash
 git clone https://github.com/devv04/BiteWise.git
-cd bitewise
+cd BiteWise
+```
 
-Backend Setup
+### 2. Backend Setup
 
-Navigate to Backend Directory
+```bash
 cd bitewise_backend
 
-
-Create a Virtual Environment
+# Create & activate virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+venv\Scripts\activate        # Windows
+# source venv/bin/activate   # macOS/Linux
 
-
-Install Python Dependencies
+# Install dependencies
 pip install -r requirements.txt
 
+# Configure API key
+echo GEMINI_API_KEY=your_key_here > .env
 
-Create a requirements.txt file with the listed Python dependencies if not already present.
+# Start server
+python server.py
+```
 
+Backend runs at **http://localhost:5001**
 
-Set Up Gemini API Key
+### 3. Frontend Setup
 
-Obtain a Gemini API key from Google AI Studio.
-Replace the GEMINI_API_KEY value in app.py with your key.
+```bash
+cd bitewise_frontend/foodscan
 
-
-Install Tesseract OCR
-
-Download and install Tesseract OCR from here.
-Add Tesseract to your system PATH.
-
-
-
-Frontend Setup
-
-Navigate to Frontend Directory
-cd ../bitewise_frontend
-
-
-Install Node Dependencies
+# Install dependencies
 npm install
 
+# Start dev server
+npm run dev
+```
 
-Prepare Environment
+Frontend runs at **http://localhost:3000**
 
-Ensure the backend is running on http://localhost:5001 (default).
+## API Endpoints
 
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/` | Health check |
+| `POST` | `/analyze` | Analyze a food image (multipart form: `image`) |
+| `GET` | `/history` | Get last 50 scan results |
+| `GET` | `/daily-summary` | Today's nutrition totals and food log |
 
+## Project Structure
 
-Running the Application
-Start the Backend
+```
+BiteWise/
+├── bitewise_backend/
+│   ├── server.py            # Flask API + Gemini AI integration
+│   ├── test_server.py       # Pytest test suite
+│   ├── requirements.txt     # Python dependencies
+│   ├── .env                 # API key (not committed)
+│   └── instance/
+│       └── bitewise.db      # SQLite database (auto-created)
+│
+├── bitewise_frontend/
+│   └── foodscan/
+│       ├── src/
+│       │   ├── App.jsx      # Main application component
+│       │   ├── main.jsx     # React entry point
+│       │   └── index.css    # Global styles
+│       ├── public/
+│       │   └── logo.png     # BiteWise logo
+│       ├── package.json
+│       └── vite.config.js
+│
+├── .gitignore
+└── README.md
+```
 
-Activate the virtual environment (if not already active):source venv/bin/activate  # On Windows: venv\Scripts\activate
+## Running Tests
 
+```bash
+cd bitewise_backend
+.\venv\Scripts\python.exe -m pytest test_server.py -v
+```
 
-Run the Flask server:python app.py
+## Contributing
 
+1. Fork the repo
+2. Create a feature branch (`git checkout -b feature/your-feature`)
+3. Commit your changes (`git commit -m "Add your feature"`)
+4. Push (`git push origin feature/your-feature`)
+5. Open a Pull Request
 
-The backend will start on http://localhost:5001.
-Access the home route at http://localhost:5001/ to confirm it’s running.
+## License
 
+This project is open source and available under the [MIT License](LICENSE).
 
+## Contact
 
-Start the Frontend
+**Dev** — [devg55030@gmail.com](mailto:devg55030@gmail.com)
 
-In the bitewise_frontend directory, run:npm run dev
-
-
-Open your browser and navigate to http://localhost:3000 (or the URL provided in the terminal).
-
-Testing
-
-Upload or capture an image of food (e.g., a fruit, burger, or salad).
-The app will display the health analysis, including disease risks, on the screen.
-
-Project Structure
-bitewise/
-├── bitewise_backend/      # Flask backend code
-│   ├── app.py            # Main backend script
-│   └── requirements.txt  # Python dependencies
-├── bitewise_frontend/    # React frontend code
-   ├── public/           # Static assets (e.g., GIFs, logo)
-   ├── src/              # Source code (e.g., App.jsx)
-   ├── package.json      # Node dependencies
-   └── vite.config.js    # Vite configuration
-
-Usage
-
-Capture Food Image: Use the camera button to snap a photo.
-Upload Image: Select an image file from your device.
-Select Language: Choose from English, Spanish, or French.
-Analyze: Click "Analyze Food" to get the health report.
-View History: Check the dashboard for past scans.
-
-Contributing
-
-Fork the repository.
-Create a new branch (git checkout -b feature-branch).
-Make your changes and commit (git commit -m "Description").
-Push to the branch (git push origin feature-branch).
-Open a Pull Request.
-
-L
-Acknowledgments
-
-Google Generative AI for image analysis.
-OpenFoodFacts for nutritional data fallback.
-Tesseract OCR for text extraction.
-The open-source community for tools like Flask, React, and Tailwind CSS.
-
-Contact
-For issues or suggestions, please open an issue on GitHub or contact devg55030@gmail.com
+Got issues or ideas? [Open an issue](https://github.com/devv04/BiteWise/issues) →
