@@ -1,4 +1,10 @@
 [build]
   base = "bitewise_frontend/foodscan"
   command = "npm install && npm run build"
-  publish = "bitewise_frontend/foodscan/dist"
+  publish = "dist"
+
+# SPA redirect — all routes go to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
