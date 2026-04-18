@@ -11,8 +11,12 @@
   "dependencies": {
     "axios": "^1.7.2",
     "framer-motion": "^10.12.16",
+    "jwt-decode": "^4.0.0",
+    "lucide-react": "^1.8.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^7.14.1",
+    "recharts": "^3.8.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",

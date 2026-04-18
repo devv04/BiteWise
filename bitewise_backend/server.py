@@ -9,19 +9,34 @@ from google import genai
 from google.genai import types
 import os
 from dotenv import load_dotenv
+import jwt
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'default_dev_secret_key')
 
 # --- Database setup ---
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///bitewise.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
+    age = db.Column(db.Integer, nullable=True)
+    weight = db.Column(db.Float, nullable=True)
+    height = db.Column(db.Float, nullable=True)
+    goal = db.Column(db.String(50), nullable=True)
+    calorie_goal = db.Column(db.Integer, default=2000)
+
 class ScanResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     food_name = db.Column(db.String(100), nullable=True)
     health_score = db.Column(db.String(50), nullable=False)
     reason = db.Column(db.Text, nullable=True)
@@ -48,6 +63,86 @@ class ScanResult(db.Model):
 
 with app.app_context():
     db.create_all()
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            parts = request.headers['Authorization'].split()
+            if len(parts) == 2 and parts[0] == 'Bearer':
+                token = parts[1]
+        
+        if not token:
+            return jsonify({'error': 'Token is missing!'}), 401
+            
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = User.query.get(data['user_id'])
+            if not current_user:
+                raise Exception("User not found")
+        except Exception as e:
+            return jsonify({'error': 'Token is invalid!', 'details': str(e)}), 401
+            
+        return f(current_user, *args, **kwargs)
+    return decorated
+
+@app.route("/register", methods=["POST"])
+def register():
+    data = request.get_json()
+    if not data or not data.get('username') or not data.get('password'):
+        return jsonify({'error': 'Missing username or password'}), 400
+        
+    if User.query.filter_by(username=data['username']).first():
+        return jsonify({'error': 'Username already exists'}), 400
+        
+    goal = data.get('goal', 'maintain')
+    weight = float(data.get('weight', 70))
+    height = float(data.get('height', 170))
+    age = int(data.get('age', 30))
+    
+    bmr = (10 * weight) + (6.25 * height) - (5 * age) + 5
+    tdee = bmr * 1.55
+    if goal == 'loss':
+        calorie_goal = int(tdee - 500)
+    elif goal == 'gain':
+        calorie_goal = int(tdee + 500)
+    else:
+        calorie_goal = int(tdee)
+    calorie_goal = max(1200, calorie_goal)
+
+    hashed_password = generate_password_hash(data['password'], method='pbkdf2:sha256')
+    new_user = User(
+        username=data['username'], 
+        password_hash=hashed_password,
+        age=age, weight=weight, height=height, goal=goal, calorie_goal=calorie_goal
+    )
+    db.session.add(new_user)
+    db.session.commit()
+    
+    return jsonify({'message': 'Registered successfully'})
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.get_json()
+    if not data or not data.get('username') or not data.get('password'):
+        return jsonify({'error': 'Missing credentials'}), 400
+        
+    user = User.query.filter_by(username=data['username']).first()
+    if not user or not check_password_hash(user.password_hash, data['password']):
+        return jsonify({'error': 'Invalid username or password'}), 401
+        
+    token = jwt.encode({
+        'user_id': user.id,
+        'exp': datetime.now(timezone.utc) + timedelta(days=7)
+    }, app.config['SECRET_KEY'], algorithm="HS256")
+    
+    return jsonify({'token': token, 'username': user.username, 'calorieGoal': user.calorie_goal})
+
+@app.route("/profile", methods=["GET"])
+@token_required
+def get_profile(current_user):
+    return jsonify({'username': current_user.username, 'calorieGoal': current_user.calorie_goal})
 
 @app.route("/")
 def home():
@@ -184,7 +279,8 @@ def build_result(gemini_result):
 
 # --- Analyze endpoint ---
 @app.route("/analyze", methods=["POST"])
-def analyze_image_route():
+@token_required
+def analyze_image_route(current_user):
     if "image" not in request.files:
         return jsonify({"error": "No image provided"}), 400
 
@@ -198,6 +294,7 @@ def analyze_image_route():
         # Save to database
         try:
             scan = ScanResult(
+                user_id=current_user.id,
                 food_name=final_result.get('foodName', 'Unknown Food'),
                 health_score=final_result.get('healthScore', 'Unknown'),
                 reason=final_result.get('reason', ''),
@@ -223,9 +320,10 @@ def analyze_image_route():
 
 # --- History endpoint ---
 @app.route("/history", methods=["GET"])
-def get_history():
+@token_required
+def get_history(current_user):
     try:
-        scans = ScanResult.query.order_by(ScanResult.created_at.desc()).limit(50).all()
+        scans = ScanResult.query.filter_by(user_id=current_user.id).order_by(ScanResult.created_at.desc()).limit(50).all()
         return jsonify([scan.to_dict() for scan in scans])
     except Exception as e:
         return jsonify([]), 500
@@ -233,10 +331,11 @@ def get_history():
 
 # --- Daily Summary endpoint (NEW FEATURE) ---
 @app.route("/daily-summary", methods=["GET"])
-def daily_summary():
+@token_required
+def daily_summary(current_user):
     try:
         today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        scans = ScanResult.query.filter(ScanResult.created_at >= today_start).all()
+        scans = ScanResult.query.filter(ScanResult.user_id == current_user.id, ScanResult.created_at >= today_start).all()
 
         total_calories = 0
         total_protein = 0
@@ -265,7 +364,7 @@ def daily_summary():
             if scan.health_score in score_counts:
                 score_counts[scan.health_score] += 1
 
-        calorie_goal = 2000
+        calorie_goal = current_user.calorie_goal
         return jsonify({
             'totalScans': len(scans),
             'calorieGoal': calorie_goal,
@@ -285,6 +384,85 @@ def daily_summary():
         return jsonify({'totalScans': 0, 'calorieGoal': 2000, 'totalCalories': 0,
                         'calorieProgress': 0, 'macros': {}, 'foodsEaten': [], 'scoreCounts': {}}), 500
 
+# --- Weekly Analytics endpoint ---
+@app.route("/weekly-analytics", methods=["GET"])
+@token_required
+def weekly_analytics(current_user):
+    try:
+        days_data = []
+        for i in range(6, -1, -1):
+            date = datetime.now(timezone.utc) - timedelta(days=i)
+            start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = start_of_day + timedelta(days=1)
+            
+            scans = ScanResult.query.filter(
+                ScanResult.user_id == current_user.id, 
+                ScanResult.created_at >= start_of_day,
+                ScanResult.created_at < end_of_day
+            ).all()
+            
+            day_calories = 0
+            healthy_count = 0
+            for scan in scans:
+                nutrients = json.loads(scan.nutrient_values) if scan.nutrient_values else {}
+                day_calories += parse_nutrient_value(nutrients.get('calories', '0'))
+                if scan.health_score == "Healthy":
+                    healthy_count += 1
+                elif scan.health_score == "Moderately Healthy":
+                    healthy_count += 0.5
+                    
+            avg_health = min(100, int((healthy_count / len(scans)) * 100)) if len(scans) > 0 else 0
+                
+            days_data.append({
+                'name': date.strftime('%a'),
+                'calories': round(day_calories),
+                'healthScore': avg_health
+            })
+            
+        return jsonify({
+            'calorieGoal': current_user.calorie_goal,
+            'data': days_data
+        })
+    except Exception as e:
+        print(f"ERROR: Weekly analytics failed: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# --- Chat endpoint ---
+@app.route("/chat/<int:scan_id>", methods=["POST"])
+@token_required
+def chat_about_scan(current_user, scan_id):
+    scan = ScanResult.query.filter_by(id=scan_id, user_id=current_user.id).first()
+    if not scan:
+        return jsonify({"error": "Scan not found or unauthorized"}), 404
+        
+    data = request.get_json()
+    user_message = data.get("message")
+    if not user_message:
+        return jsonify({"error": "No message provided"}), 400
+        
+    prompt = f"""
+You are Bitewise, a helpful AI nutrition assistant.
+The user is asking a question about a food they scanned: "{scan.food_name}".
+Here is the context of the scanned food:
+- Health Score: {scan.health_score}
+- Reason: {scan.reason}
+- Warnings: {scan.warnings}
+- Allergens: {scan.allergens}
+- Nutrients: {scan.nutrient_values}
+
+User Question: {user_message}
+
+Answer concisely, helpfully, and stay focused on the food context and nutrition. Keep it under 3-4 sentences.
+"""
+    try:
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[prompt]
+        )
+        return jsonify({"reply": response.text.strip()})
+    except Exception as e:
+        print(f"Chat error: {e}")
+        return jsonify({"error": "Failed to get AI response"}), 500
 
 if __name__ == "__main__":
     print("-" * 50)

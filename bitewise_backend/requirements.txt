@@ -11,3 +11,4 @@ deep-translator
 opencv-python
 pytest
 gunicorn
+PyJWT
